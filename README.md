@@ -20,7 +20,7 @@ A Fableflake ID is composed of
 Add the following to your `Cargo.toml`:
 ```toml
 [dependencies]
-fableflake = "0.4.1"
+fableflake = "0.4"
 ```
 
 ## Quickstart
