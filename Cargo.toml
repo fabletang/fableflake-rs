@@ -1,0 +1,28 @@
+[package]
+name = "fableflake"
+version = "0.4.1"
+authors = ["Arne Bahlo <hey@arne.me>"]
+license = "MIT OR Apache-2.0"
+description = "A distributed unique ID generator inspired by Twitter's Snowflake"
+repository = "https://github.com/fable/fableflake-rs"
+readme = "README.md"
+keywords = ["fableflake", "snowflake", "random", "id", "generator"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["now"] }
+thiserror = "2.0"
+pnet_datalink = { version = "0.35", default-features = false, optional = true }
+
+[features]
+default = ["pnet"]
+pnet = ["pnet_datalink"]
+
+[dev-dependencies]
+bencher = "0.1"
+
+[[bench]]
+name = "bench"
+harness = false

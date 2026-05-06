@@ -1,0 +1,161 @@
+use chrono::prelude::*;
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
+
+use crate::{builder::Builder, error::Error};
+
+/// bit length of time
+pub(crate) const BIT_LEN_TIME: u64 = 39;
+/// bit length of sequence number
+pub(crate) const BIT_LEN_SEQUENCE: u64 = 8;
+/// bit length of machine id
+pub(crate) const BIT_LEN_MACHINE_ID: u64 = 63 - BIT_LEN_TIME - BIT_LEN_SEQUENCE;
+
+const GENERATE_MASK_SEQUENCE: u16 = (1 << BIT_LEN_SEQUENCE) - 1;
+
+#[derive(Debug)]
+pub(crate) struct Internals {
+    pub(crate) elapsed_time: i64,
+    pub(crate) sequence: u16,
+}
+
+#[derive(Debug)]
+pub(crate) struct SharedFableflake {
+    pub(crate) start_time: i64,
+    pub(crate) machine_id: u16,
+    pub(crate) internals: Mutex<Internals>,
+}
+
+/// Fableflake is a distributed unique ID generator.
+#[derive(Debug, Clone)]
+pub struct Fableflake(pub(crate) Arc<SharedFableflake>);
+
+impl Fableflake {
+    /// Create a new Fableflake with the default configuration.
+    /// For custom configuration see [`builder`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the finalization failed.
+    ///
+    /// [`builder`]: struct.Fableflake.html#method.builder
+    pub fn new() -> Result<Self, Error> {
+        Builder::new().finalize()
+    }
+
+    /// Create a new [`Builder`] to construct a Fableflake.
+    ///
+    /// [`Builder`]: struct.Builder.html
+    #[must_use]
+    pub fn builder<'a>() -> Builder<'a> {
+        Builder::new()
+    }
+
+    pub(crate) fn new_inner(shared: Arc<SharedFableflake>) -> Self {
+        Self(shared)
+    }
+
+    /// Generate the next unique id.
+    /// After the Fableflake time overflows, `next_id` returns an error.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if it can't determin the elapsed time.
+    /// It also returns an error if it's over the time limit.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn next_id(&self) -> Result<u64, Error> {
+        let mut internals = self.0.internals.lock().map_err(|_| Error::MutexPoisoned)?;
+
+        let current = current_elapsed_time(self.0.start_time)?;
+        if internals.elapsed_time < current {
+            internals.elapsed_time = current;
+            internals.sequence = 0;
+        } else {
+            // self.elapsed_time >= current
+            internals.sequence = (internals.sequence + 1) & GENERATE_MASK_SEQUENCE;
+            if internals.sequence == 0 {
+                internals.elapsed_time += 1;
+                let overtime = internals.elapsed_time - current;
+                thread::sleep(sleep_time(overtime)?);
+            }
+        }
+
+        if internals.elapsed_time >= 1 << BIT_LEN_TIME {
+            return Err(Error::OverTimeLimit);
+        }
+
+        Ok(
+            (internals.elapsed_time as u64) << (BIT_LEN_SEQUENCE + BIT_LEN_MACHINE_ID)
+                | u64::from(internals.sequence) << BIT_LEN_MACHINE_ID
+                | u64::from(self.0.machine_id),
+        )
+    }
+}
+
+const FABLEFLAKE_TIME_UNIT: i64 = 10_000_000; // nanoseconds, i.e. 10msec
+/// 2023-07-21T00:00:00+08:00 in unix nanoseconds.
+pub(crate) const FABLEFLAKE_EPOCH_NANOS: i64 = 1_689_868_800_000_000_000;
+
+pub(crate) fn to_fableflake_time(time: DateTime<Utc>) -> Result<i64, Error> {
+    let nanos = time
+        .timestamp_nanos_opt()
+        .ok_or(Error::FailedToGetCurrentTime)?;
+    Ok((nanos - FABLEFLAKE_EPOCH_NANOS) / FABLEFLAKE_TIME_UNIT)
+}
+
+fn current_elapsed_time(start_time: i64) -> Result<i64, Error> {
+    Ok(to_fableflake_time(Utc::now())? - start_time)
+}
+
+#[allow(clippy::cast_sign_loss)]
+fn sleep_time(overtime: i64) -> Result<Duration, Error> {
+    Ok(Duration::from_millis(overtime as u64 * 10)
+        - Duration::from_nanos(
+            (Utc::now()
+                .timestamp_nanos_opt()
+                .ok_or(Error::FailedToGetCurrentTime)?
+                % FABLEFLAKE_TIME_UNIT) as u64,
+        ))
+}
+
+/// A decomposed Fableflake.
+pub struct DecomposedFableflake {
+    /// The ID.
+    pub id: u64,
+    /// The MSB.
+    pub msb: u64,
+    /// The time.
+    pub time: u64,
+    /// The sequence number.
+    pub sequence: u64,
+    /// The machine id.
+    pub machine_id: u64,
+}
+
+impl DecomposedFableflake {
+    /// Returns the timestamp in nanoseconds without epoch.
+    #[must_use]
+    #[allow(clippy::cast_possible_wrap)]
+    pub fn nanos_time(&self) -> i64 {
+        (self.time as i64) * FABLEFLAKE_TIME_UNIT
+    }
+}
+
+const DECOMPOSE_MASK_SEQUENCE: u64 = ((1 << BIT_LEN_SEQUENCE) - 1) << BIT_LEN_MACHINE_ID;
+
+const MASK_MACHINE_ID: u64 = (1 << BIT_LEN_MACHINE_ID) - 1;
+
+/// Break a Fableflake ID up into its parts.
+#[must_use]
+pub fn decompose(id: u64) -> DecomposedFableflake {
+    DecomposedFableflake {
+        id,
+        msb: id >> 63,
+        time: id >> (BIT_LEN_SEQUENCE + BIT_LEN_MACHINE_ID),
+        sequence: (id & DECOMPOSE_MASK_SEQUENCE) >> BIT_LEN_MACHINE_ID,
+        machine_id: id & MASK_MACHINE_ID,
+    }
+}
