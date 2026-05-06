@@ -112,13 +112,14 @@ fn current_elapsed_time(start_time: i64) -> Result<i64, Error> {
 
 #[allow(clippy::cast_sign_loss)]
 fn sleep_time(overtime: i64) -> Result<Duration, Error> {
-    Ok(Duration::from_millis(overtime as u64 * 10)
-        - Duration::from_nanos(
+    Duration::from_millis(overtime as u64 * 10)
+        .checked_sub(Duration::from_nanos(
             (Utc::now()
                 .timestamp_nanos_opt()
                 .ok_or(Error::FailedToGetCurrentTime)?
                 % FABLEFLAKE_TIME_UNIT) as u64,
         ))
+        .ok_or(Error::FailedToGetCurrentTime)
 }
 
 /// A decomposed Fableflake.
