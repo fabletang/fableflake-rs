@@ -7,7 +7,7 @@
 
 A distributed unique ID generator inspired by [Twitter's Snowflake](https://blog.twitter.com/2010/announcing-snowflake).
 
-This is a Rust implementation of the original [fable/fableflake](https://github.com/sony/sonyflake), which is written in Go.
+This is a Rust implementation of the original [sony/sonyflake](https://github.com/sony/sonyflake), which is written in Go.
 
 A Fableflake ID is composed of
 
